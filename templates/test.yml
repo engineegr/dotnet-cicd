@@ -1,0 +1,55 @@
+spec:
+  inputs:
+    if_test_stage:
+      default: "test"
+      description: "IF Defines the test stage jobs"
+    stage:
+      default: "test"
+      description: "Defines the test stage"
+    default_branch:
+      default: "develop"
+      description: "Default commit branch"
+    commit_tag_regexp:
+      default: "/-develop$/"
+      description: "Tag: allows to run test by tag"
+    environment:
+      default: development
+      description: "Test environment"
+    docker_runner:
+      default: "docker"
+      description: "Gitlab runner to build binary artifacts"
+    image:
+      default: "${CI_REGISTRY}/apps-team/package-registry/sellc-dotnet-sdk-npm:6.0-alpine3.18"
+      description: "Docker image within which we build our application artifacts"
+    app_title:
+      default: "LdapQueryTest"
+      description: "Dotnet application title"
+    entry_csproj:
+      default: "test/LdapQueryAPI/LdapQueryAPI.csproj"
+      description: "Dotnet entry project"
+    rid:
+      default: "centos.9-x64"
+      description: "Dotnet Runtime identifier"
+    allow_failure:
+      default: "true"
+---
+
+variables:
+  ALLOW_FAILURE: "$[[ inputs.allow_failure ]]"
+  ENTRY_CSPROJ: $[[ inputs.entry_csproj ]]
+
+"test-$[[ inputs.environment ]]-$[[ inputs.app_title ]]":
+  image: $[[ inputs.image ]]
+  stage: $[[ inputs.stage ]]
+  tags:
+    - $[[ inputs.docker_runner ]]
+  rules:
+    # use RegExpression, == and != don't work: error if invalid expression syntax
+    - if: '$IF_TRUTH =~ "$[[ inputs.if_test_stage ]]" && $IF_TRUTH =~ "$[[ inputs.allow_failure ]]" && $ENTRY_CSPROJ !~ /^$/ && $CI_COMMIT_BRANCH == "$[[ inputs.default_branch ]]"'
+      allow_failure: true
+    - if: '$IF_TRUTH =~ "$[[ inputs.if_test_stage ]]" && $CI_COMMIT_BRANCH == "$[[ inputs.default_branch ]]"'
+    - if: '$IF_TRUTH =~ "$[[ inputs.if_test_stage ]]" && $CI_COMMIT_TAG != null && $CI_COMMIT_TAG =~ $[[ inputs.commit_tag_regexp ]]'
+
+  script:
+    - dotnet restore "$[[ inputs.entry_csproj ]]" --runtime "$[[ inputs.rid ]]" --source "${NUGET_REPO_URL}"
+    - dotnet test "$[[ inputs.entry_csproj ]]" --logger:trx --no-restore

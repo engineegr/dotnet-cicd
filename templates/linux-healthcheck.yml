@@ -1,0 +1,123 @@
+spec:
+  inputs:
+    stage:
+      default: check
+      description: "Defines the deploy stage"
+    if_check_stage:
+      default: "true"
+      description: "If defines the deploy stage jobs"
+    default_branch:
+      default: develop
+    if_deploy_by_tag:
+      default: "false"
+    commit_tag_regexp:
+      default: '/-dummy$/'
+    when:
+      options: ["on_success", "manual"]
+      default: on_success
+      description: "Manually or automatically"
+    if_wait_before:
+      default: "false"
+      description: "If wait before healtcheck query"
+    wait_for_sec:
+      type: number
+      default: 7
+      description: "If wait before healtcheck query"
+    shell_runner:
+      default: linux
+      description: "Gitlab runner which query healtcheck from"
+    app_title:
+      default: eptw
+      description: "Application title"
+    host_url:
+      description: "Healthcheck hostname, FORMAT: https?://hostname"
+    health_path:
+      description: "Path to healtcheck"
+    healthy_status:
+      default: Healthy
+    unhealthy_status:
+      default: Unhealthy
+    jq_status_path:
+      description: "JQ Path to status"
+    allow_failure:
+      default: "false"
+      description: "If exit 1 in case of Unhealthy status"
+
+---
+variables:
+  # Use the global variables to have ability to pass through or omit the stages (test, deploy)
+  CI_DEBUG_TRACE: "true"
+  IF_TRUTH: "true"
+  IF_FALSE: "false"
+  DUMMY: "DUMMY"
+
+"healthcheck-$[[ inputs.app_title ]]":
+  stage: "$[[ inputs.stage ]]"
+  when: $[[ inputs.when ]]
+  tags:
+    - "$[[ inputs.shell_runner ]]"
+  # manual jobs have 'allow_failure = true' by default (@see https://docs.gitlab.com/ee/ci/yaml/#allow_failure)
+  rules:
+    - if: '$IF_FALSE =~ "$[[ inputs.allow_failure ]]"
+      && ($IF_TRUTH =~ "$[[ inputs.if_check_stage ]]" && $CI_COMMIT_BRANCH != null && $CI_COMMIT_BRANCH == "$[[ inputs.default_branch ]]" && $IF_FALSE == "$[[ inputs.if_deploy_by_tag ]]"
+      || $IF_TRUTH =~ "$[[ inputs.if_check_stage ]]" && $CI_COMMIT_TAG != null && $CI_COMMIT_TAG =~ "$[[ inputs.commit_tag_regexp ]]" && $IF_TRUTH == "$[[ inputs.if_deploy_by_tag ]]")'
+      allow_failure: false
+    - if: '$IF_FALSE =~ "$[[ inputs.allow_failure ]]"
+      && ($IF_TRUTH =~ "$[[ inputs.if_check_stage ]]" && $CI_COMMIT_BRANCH != null && $CI_COMMIT_BRANCH == "$[[ inputs.default_branch ]]" && $IF_FALSE == "$[[ inputs.if_deploy_by_tag ]]"
+      || $IF_TRUTH =~ "$[[ inputs.if_check_stage ]]" && $CI_COMMIT_TAG != null && $CI_COMMIT_TAG =~ "$[[ inputs.commit_tag_regexp ]]" && $IF_TRUTH == "$[[ inputs.if_deploy_by_tag ]]")'
+      allow_failure: true
+  script:
+    - |
+      export SHELLOPTS
+      set -o errexit
+      set -o xtrace
+      #
+      # COLORS
+      #
+      # Black        0;30     Dark Gray     1;30
+      # Red          0;31     Light Red     1;31
+      # Green        0;32     Light Green   1;32
+      # Brown/Orange 0;33     Yellow        1;33
+      # Blue         0;34     Light Blue    1;34
+      # Purple       0;35     Light Purple  1;35
+      # Cyan         0;36     Light Cyan    1;36
+      # Light Gray   0;37     White         1;37
+      #
+      GREEN_C='\033[0;32m'
+      ORANGE_C='\033[0;33m'
+      RED_C='\033[0;31m'
+      NC='\033[0m' # No color
+      echo -e "${GREEN_C}Debug HealthCheck: $[[ inputs.app_title ]]${NC}"
+      jq --version || ERR=$?
+      if [[ $ERR -ne 0 ]]; then
+        echo -e "${RED_C}Debug HealthCheck: no jq found${NC}"
+        exit 1
+      fi
+
+      if [[ "$[[ inputs.if_wait_before ]]" == "true" ]]; then
+        WAIT_FOR_SEC=$[[ inputs.wait_for_sec ]]
+        echo -e "${ORANGE_C}DEBUG [deploy] Wait for ${WAIT_FOR_SEC}${NC}"
+        sleep "${WAIT_FOR_SEC}s"
+      fi
+
+      echo -e "${GREEN_C}Debug HealthCheck: Start checking..."
+      echo -e "Debug HealthCheck: Check general status${NC}"
+
+      HEALTH_URL="$[[ inputs.host_url ]]/$[[ inputs.health_path ]]"
+      UNHEALTHY_STATUS="$[[ inputs.unhealthy_status ]]"
+      HEALTHY_STATUS="$[[ inputs.healthy_status ]]"
+
+      JQ_STATUS_PATH="$[[ inputs.jq_status_path ]]"
+      IF_HEALTHY="$(curl -sk ${HEALTH_URL} | jq ${JQ_STATUS_PATH} | grep -c -e ${HEALTHY_STATUS})" || true
+      ALLOW_FAILURE="$[[ inputs.allow_failure ]]"
+
+      if [[ ${IF_HEALTHY} -eq 1 ]]; then
+        echo -e "${GREEN_C}Debug HealthCheck: Status ${HEALTHY_STATUS}${NC}"
+      else
+        echo -e "${RED_C}Debug HealthCheck: Status ${UNHEALTHY_STATUS}"
+        echo -e "Debug HealthCheck: Report status: ${NC}"
+        curl -k -s "${HEALTH_URL}" | jq . | grep --color -z -e "${UNHEALTHY_STATUS}"
+        if [[ $ALLOW_FAILURE == "false" ]]; then
+          exit 1;
+        fi
+      fi

@@ -1,0 +1,275 @@
+spec:
+  inputs:
+    #
+    # Component full-pipeline.yml provide common interface to build/test/deploy components.
+    # So it manage build and test stages.
+    #
+    # Build And Test stages
+    #
+    stage_build:
+      default: build
+      description: "Defines the build stage"
+    stage_test:
+      default: test
+      description: "Defines the test stage"
+    docker_runner:
+      default: docker
+      description: "Gitlab runner to build binary artifacts"
+    build_image:
+      default: ${CI_REGISTRY}/apps-team/package-registry/sellc-dotnet-sdk-npm:6.0-alpine3.18
+      description: "Docker image within which we build our application artifacts"
+    app_title:
+      default: LdapQueryTest
+      description: "Dotnet application title"
+    binary_directory:
+      default: app
+      description: "Output directory for created binary artifacts"
+    rid:
+      default: centos.9-x64
+      description: "Dotnet Runtime identifier"
+    if_self_contained:
+      default: "true"
+      description: "If Dotnet build must be self-contained"
+    #
+    # Build template section
+    #
+    entry_csproj:
+      default: test/LdapQueryAPI/LdapQueryAPI.csproj
+      description: "Dotnet entry project"
+    build_before_script:
+      default: 'echo "INFO [build] before_script: $(hostname)"'
+      description: "Override before_script for build template"
+    development_branch:
+      default: develop
+      description: "Default commit branch"
+    production_branch:
+      default: master
+      description: "Default production commit branch"
+    build_artifacts_expiry_time:
+      default: "10 days"
+      description: "Artifact expiry time period: @see https://docs.gitlab.com/ee/ci/yaml/#artifactsexpire_in"
+    #
+    # Test template section
+    #
+    # not required
+    if_test_stage:
+      default: "false"
+      description: "If we must include test stage component"
+    test_entry_csproj:
+      default: ""
+      description: "Dotnet test entry project"
+    test_allow_failure:
+      default: "true"
+    #
+    # Deploy section
+    #
+    if_deploy_stage:
+      default: "true"
+      description: "If we must include test deploy stage component"
+    if_production_deploy_stage:
+      default: "true"
+      description: "If we must include production deploy stage component"
+    stage_deploy:
+      default: deploy
+      description: "Defines the deploy stage"
+    deploy_app_svc:
+      default: ldap_query_api
+      description: "Systemd service name for the app"
+    deploy_app_dir:
+      default: /usr/local/share/applications/dotnet-apps
+      description: "Deploy app to"
+    deploy_appsettings_dir:
+      default: test/LdapQueryAPI
+      description: "Appsettings.json dir"
+    deploy_before_script:
+      default: echo "INFO [ full-pipeline ] before_script"
+      description: "Override before_script for deploy template"
+    deploy_development_before_script:
+      default: "DUMMY"
+      description: "Override before_script for deploy template (development env)"
+    deploy_production_before_script:
+      default: "DUMMY"
+      description: "Override before_script for deploy template (production env)"
+    deploy_after_script:
+      default: |
+        echo "INFO [ full-pipeline ] standby_after_script"
+        echo "INFO [ full-pipeline ] standby_after_script Try to delete ${LOCAL_APP_DIR}/app/appsettings.${DEPLOY_ASPNETCORE_ENV}.json"
+        if [[ -f "${LOCAL_APP_DIR}/app/appsettings.${DEPLOY_ASPNETCORE_ENV}.json" ]]; then
+          rm "${LOCAL_APP_DIR}/app/appsettings.${DEPLOY_ASPNETCORE_ENV}.json"
+        fi
+      description: "Override after_script for deploy template (development env)"
+    deploy_development_after_script:
+      default: "DUMMY"
+      description: "Override after_script for deploy template (development env)"
+    deploy_production_after_script:
+      default: "DUMMY"
+      description: "Override after_script for deploy template (production env)"
+    development_shell_runner:
+      default: linux
+      description: "Gitlab runner to deploy DEV build"
+    production_shell_runner:
+      default: linux
+      description: "Gitlab runner to deploy PROD build"
+    development_environment:
+      default: Development
+      description: "Deploy environment"
+    production_environment:
+      default: Production
+      description: "Deploy Prod environment"
+    production_commit_tag_regexp:
+      default: "/-master$/"
+      description: "Identify tag for production update"
+    if_deploy_production_by_tag:
+      default: "false"
+      description: "If we must deploy application by creating production tag"
+    development_deploy_when:
+      options: ["on_success", "manual"]
+      default: "on_success"
+      description: "Control development deployment: manually or automatically (default)"
+    production_deploy_when:
+      options: ["on_success", "manual"]
+      default: "manual"
+      description: "Control production deployment: manually (default) or automatically"
+    # For Production environment only
+    deploy_release_when:
+      options: ["on_success", "manual"]
+      default: "manual"
+      description: "Control release creation: manually (default)"
+    if_deploy_release_job:
+      default: "false"
+      description: "If we must include application release job"
+    deploy_release_output_dir:
+      default: "/tmp"
+      description: |
+        Output dir is used to store application release. Must be created manually.
+        Directory permissions: user=gitlab-runner, group=service-dotnet-app (permission bits: 2755).
+    deploy_aspnetcore_environment:
+      default: "Production"
+      description: |
+        SaltStack constructs dotnet application systemd services and passes the app process on the ASPNETCORE_ENVIRONMENT shell env variable.
+        deploy template deletes appsettings.${ASPNETCORE_ENVIRONMENT}.json by default to prevent repeatadely merge appsettings.json with
+        appsettings.${ASPNETCORE_ENVIRONMENT}.json
+    deploy_development_aspnetcore_environment:
+      default: "DUMMY"
+      description: |
+        SaltStack constructs dotnet application systemd services and passes the app process on the ASPNETCORE_ENVIRONMENT shell env variable.
+        deploy template deletes appsettings.${ASPNETCORE_ENVIRONMENT}.json by default to prevent repeatadely merge appsettings.json with
+        appsettings.${ASPNETCORE_ENVIRONMENT}.json
+    deploy_production_aspnetcore_environment:
+      default: "DUMMY"
+      description: |
+        SaltStack constructs dotnet application systemd services and passes the app process on the ASPNETCORE_ENVIRONMENT shell env variable.
+        deploy template deletes appsettings.${ASPNETCORE_ENVIRONMENT}.json by default to prevent repeatadely merge appsettings.json with
+        appsettings.${ASPNETCORE_ENVIRONMENT}.json
+---
+variables:
+  # Use the global variables to have ability to pass through or omit the stages (test, deploy)
+  CI_DEBUG_TRACE: "true"
+  IF_TRUTH: "true"
+  IF_FALSE: "false"
+  DUMMY: "DUMMY"
+  DEPLOY_COMMON_ASPNETCORE_ENV: "$[[ inputs.deploy_aspnetcore_environment ]]"
+
+stages:
+  - build
+  - test
+  - deploy
+
+include:
+  # Build development
+  - local: "/templates/build.yml"
+    inputs:
+      stage: $[[ inputs.stage_build ]]
+      docker_runner: $[[ inputs.docker_runner ]]
+      image: $[[ inputs.build_image ]]
+      rid: $[[ inputs.rid ]]
+      app_title: $[[ inputs.app_title ]]
+      entry_csproj: $[[ inputs.entry_csproj ]]
+      binary_directory: $[[ inputs.binary_directory ]]
+      if_self_contained: $[[ inputs.if_self_contained ]]
+      before_script: $[[ inputs.build_before_script ]]
+      default_branch: $[[ inputs.development_branch ]]
+      environment: $[[ inputs.development_environment ]]
+      artifacts_expiry_time: $[[ inputs.build_artifacts_expiry_time ]]
+
+  # Build production
+  - local: "/templates/build.yml"
+    inputs:
+      stage: $[[ inputs.stage_build ]]
+      docker_runner: $[[ inputs.docker_runner ]]
+      image: $[[ inputs.build_image ]]
+      rid: $[[ inputs.rid ]]
+      app_title: $[[ inputs.app_title ]]
+      entry_csproj: $[[ inputs.entry_csproj ]]
+      binary_directory: $[[ inputs.binary_directory ]]
+      if_self_contained: $[[ inputs.if_self_contained ]]
+      before_script: $[[ inputs.build_before_script ]]
+      default_branch: $[[ inputs.production_branch ]]
+      environment: $[[ inputs.production_environment ]]
+      commit_tag_regexp: $[[ inputs.production_commit_tag_regexp ]]
+      artifacts_expiry_time: $[[ inputs.build_artifacts_expiry_time ]]
+      if_deploy_by_tag: $[[ inputs.if_deploy_production_by_tag ]]
+
+  # Test development
+  - local: "/templates/test.yml"
+    inputs:
+      if_test_stage: $[[ inputs.if_test_stage ]]
+      stage: $[[ inputs.stage_test ]]
+      docker_runner: $[[ inputs.docker_runner ]]
+      image: $[[ inputs.build_image ]]
+      rid: $[[ inputs.rid ]]
+      app_title: $[[ inputs.app_title ]]
+      entry_csproj: $[[ inputs.test_entry_csproj ]]
+      default_branch: $[[ inputs.development_branch ]]
+      allow_failure: $[[ inputs.test_allow_failure ]]
+      environment: $[[ inputs.development_environment ]]
+
+  #
+  # Include deploy component, parameterize it to deploy app into DEV/TEST env
+  #
+  - local: "/templates/deploy.yml"
+    inputs:
+      if_deploy_stage: $[[ inputs.if_deploy_stage ]]
+      stage: $[[ inputs.stage_deploy ]]
+      shell_runner: $[[ inputs.development_shell_runner ]]
+      default_branch: $[[ inputs.development_branch ]]
+      environment: $[[ inputs.development_environment ]]
+      binary_directory: $[[ inputs.binary_directory ]]
+      app_svc: $[[ inputs.deploy_app_svc ]]
+      app_dir: $[[ inputs.deploy_app_dir ]]
+      app_title: $[[ inputs.app_title ]]
+      appsettings_dir: $[[ inputs.deploy_appsettings_dir ]]
+      deploy_when: $[[ inputs.development_deploy_when ]]
+      standby_before_script: $[[ inputs.deploy_before_script ]]
+      standby_after_script: $[[ inputs.deploy_after_script ]]
+      before_script: $[[ inputs.deploy_development_before_script ]]
+      after_script: $[[ inputs.deploy_development_after_script ]]
+      aspnetcore_environment: $[[ inputs.deploy_development_aspnetcore_environment ]]
+
+  #
+  # Include deploy component, parameterize it to deploy app into PROD env
+  #
+  - local: "/templates/deploy.yml"
+    inputs:
+      if_deploy_stage: $[[ inputs.if_production_deploy_stage ]]
+      stage: $[[ inputs.stage_deploy ]]
+      if_deploy_by_tag: $[[ inputs.if_deploy_production_by_tag ]]
+      shell_runner: $[[ inputs.production_shell_runner ]]
+      default_branch: $[[ inputs.production_branch ]]
+      environment: $[[ inputs.production_environment ]]
+      binary_directory: $[[ inputs.binary_directory ]]
+      app_svc: $[[ inputs.deploy_app_svc ]]
+      app_dir: $[[ inputs.deploy_app_dir ]]
+      app_title: $[[ inputs.app_title ]]
+      appsettings_dir: $[[ inputs.deploy_appsettings_dir ]]
+      deploy_when: $[[ inputs.production_deploy_when ]]
+      if_binary_backup: "true"
+      commit_tag_regexp: $[[ inputs.production_commit_tag_regexp ]]
+      if_release_job: $[[ inputs.if_deploy_release_job ]]
+      release_output_dir: $[[ inputs.deploy_release_output_dir ]]
+      release_when: $[[ inputs.deploy_release_when ]]
+      standby_before_script: $[[ inputs.deploy_before_script ]]
+      standby_after_script: $[[ inputs.deploy_after_script ]]
+      before_script: $[[ inputs.deploy_production_before_script ]]
+      after_script: $[[ inputs.deploy_production_after_script ]]
+      aspnetcore_environment: $[[ inputs.deploy_production_aspnetcore_environment ]]

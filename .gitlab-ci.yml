@@ -1,0 +1,63 @@
+#
+# Test components
+#
+stages:
+  - deploy
+  - check
+
+include:
+#   - project: ${CI_PROJECT_PATH}
+#     file: '/templates/full-pipeline.yml'
+#     ref: 'refs/heads/develop'
+#     inputs:
+#       stage_build: build
+#       stage_test: test
+#       app_title: LdapQueryTest
+#       development_branch: develop
+#       entry_csproj: test/LdapQueryAPI/LdapQueryAPI.csproj
+#       # test_entry_csproj: test/LdapQueryAPI/LdapQueryAPI.csproj
+#       # build_before_script: 'echo INFO [build] before_script: $(hostname)'
+#       if_test_stage: "false"
+#       if_deploy_stage: "false"
+#       production_commit_tag_regexp: /-linux_prod$/
+#       if_deploy_production_by_tag: "true"
+#       # deploy_development_before_script: |
+#       #   echo "full-pipeline [DEBUG] CHECK parameter deploy_development_before_script"
+#       #   echo "full-pipeline [DEBUG] CHECK parameter deploy_development_before_script SECOND Line"
+
+  #
+  # Migrate DB eptw-test
+  #
+  - project: 'apps-team/dotnet-cicd'
+    file: "/templates/db-migration.yml"
+    inputs:
+      stage: deploy
+      shell_runner: linux
+      # default_branch: dev_linux
+      default_branch: develop # just for testing
+      environment: development-linux
+      project_root: test/LdapQueryAPI
+      cs_project_path: test/LdapQueryAPI/LdapQueryAPI.csproj
+      db_context: DUMMY
+      app_title: eptw-test
+      aspnetcore_environment: Production
+      connection_string: "UserID=user;Password=secret;Host= yuzdc1-n-v22037.sakhalin2.ru;Port=5432;Database=db_name;Pooling=true;IncludeErrorDetail=true;"
+
+  #
+  # Run healthcheck
+  #
+  - project: 'apps-team/dotnet-cicd'
+    file: "/templates/linux-healthcheck.yml"
+    inputs:
+      stage: check
+      when: on_success
+      shell_runner: linux
+      default_branch: develop
+      if_deploy_by_tag: "false"
+      commit_tag_regexp: '/-linux_training$/'
+      shell_runner: eptw-test-linux
+      wait_for_sec: 10
+      app_title: eptw-test
+      host_url: "http://eptw-training.sakhalinenergy.ru"
+      health_path: "healthcheck"
+      jq_status_path: ".Status"

@@ -1,0 +1,81 @@
+spec:
+  inputs:
+    stage:
+      default: ship
+      description: "Defines the delivery stage"
+    default_branch:
+      default: develop
+      description: "Default commit branch (may be any branch)"
+    ship_when:
+      default: manual
+      description: "Manually or automatically"
+    environment:
+      default: development
+      description: "Build environment"
+    docker_runner:
+      default: docker
+      description: "Gitlab runner to build binary artifacts"
+    image:
+      default: ${CI_REGISTRY}/apps-team/package-registry/sellc-dotnet-sdk-npm:6.0-alpine3.18
+      description: "Docker image within which we build our application artifacts"
+    projects:
+      default: "test/LdapQueryAPI/LdapQueryAPI.csproj"
+      description: "Dotnet projects to ship"
+    configuration:
+      default: Release
+      description: "Dotnet delivery configuration"
+    verbosity:
+      default: minimal
+      description: "Dotnet command verbosity"
+    rid:
+      default: linux-x64
+      description: "Dotnet Runtime identifier"
+    if_self_contained:
+      default: "true"
+      description: "If Dotnet build must be self-contained"
+    if_pdb_and_src:
+      default: "false"
+      description: "If include pdb symbols with source"
+---
+
+"packAndShip-$[[ inputs.environment ]]":
+  image: $[[ inputs.image ]]
+  stage: $[[ inputs.stage ]]
+  when: $[[ inputs.ship_when ]]
+  environment: $[[ inputs.environment ]]
+  tags:
+    - $[[ inputs.docker_runner ]]
+  rules:
+    - if: '$CI_COMMIT_BRANCH != null && $CI_COMMIT_BRANCH == "$[[ inputs.default_branch ]]"'
+  script:
+    - |
+      set -o errexit
+      set -o xtrace
+      mkdir packages || true
+      echo "Shipping projects: $[[ inputs.projects ]]"
+      for p in $[[ inputs.projects ]]
+      do
+        dotnet build "$p" -c "$[[ inputs.configuration ]]" \
+          --runtime "$[[ inputs.rid ]]" --self-contained "$[[ inputs.if_self_contained ]]" \
+          --source "${NUGET_REPO_URL}" --verbosity "$[[ inputs.verbosity ]]"
+
+        #
+        # use MSBuild property switch -property:RuntimeIdentifier for runtime otherwise we get issue
+        # <NuGet.Build.Tasks.Pack.targets(221,5): error NU5026: The file 'dummy.dll' to be packed was not found on disk>
+        # See @link https://github.com/dotnet/sdk/issues/13983
+        #
+        if [[ "$[[ inputs.if_pdb_and_src ]]" == "true" ]]; then
+          dotnet pack "$p" --output ./packages -c "$[[ inputs.configuration ]]" \
+            --no-build --verbosity "$[[ inputs.verbosity ]]" \
+            --include-source --include-symbols \
+            -property:RuntimeIdentifier="$[[ inputs.rid ]]"
+        else
+          dotnet pack "$p" --output ./packages -c "$[[ inputs.configuration ]]" \
+            --no-build --verbosity "$[[ inputs.verbosity ]]" \
+            -property:RuntimeIdentifier="$[[ inputs.rid ]]"
+        fi
+
+      done
+      find ./packages -regex ".*.nupkg" -exec dotnet nuget push '{}' \
+          --api-key "${NUGET_API_KEY}" \
+          --source "${NUGET_HOST_REPO_URL}" \;

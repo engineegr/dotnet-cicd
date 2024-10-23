@@ -1,0 +1,78 @@
+spec:
+  inputs:
+    stage:
+      default: build
+      description: "Defines the build stage"
+    artifacts_expiry_time:
+      default: "10 days"
+      description: "Artifact expiry time period: @see https://docs.gitlab.com/ee/ci/yaml/#artifactsexpire_in"
+    default_branch:
+      default: develop
+      description: "Default commit branch (may be any branch)"
+    commit_tag_regexp:
+      default: "/-develop$/"
+      description: "Tag: allows to build by tag"
+    environment:
+      default: development
+      description: "Build environment"
+    docker_runner:
+      default: docker
+      description: "Gitlab runner to build binary artifacts"
+    image:
+      default: ${CI_REGISTRY}/apps-team/package-registry/sellc-dotnet-sdk-npm:6.0-alpine3.18
+      description: "Docker image within which we build our application artifacts"
+    before_script:
+      default: 'echo "INFO before_script"'
+      description: "Override before_script"
+    app_title:
+      default: LdapQueryTest
+      description: "Dotnet application title"
+    entry_csproj:
+      default: test/LdapQueryAPI/LdapQueryAPI.csproj
+      description: "Dotnet entry project"
+    binary_directory:
+      default: app
+      description: "Output directory for created binary artifacts"
+    rid:
+      default: centos.9-x64
+      description: "Dotnet Runtime identifier"
+    if_self_contained:
+      type: string
+      default: "true"
+      description: "If Dotnet build must be self-contained"
+    if_deploy_by_tag:
+      default: "false"
+      description: "If we must deploy application by creating branch tag"
+---
+".build-$[[ inputs.environment ]]":
+  image: $[[ inputs.image ]]
+  stage: $[[ inputs.stage ]]
+  environment: $[[ inputs.environment ]]
+  tags:
+    - $[[ inputs.docker_runner ]]
+  script:
+    - |
+      set -o errexit
+      set -o xtrace
+      dotnet clean --runtime "$[[ inputs.rid ]]" \
+        -c Release "$[[ inputs.entry_csproj ]]"
+      dotnet publish "$[[ inputs.entry_csproj ]]" -c Release -o $[[ inputs.binary_directory ]] \
+        --runtime "$[[ inputs.rid ]]" --self-contained "$[[ inputs.if_self_contained ]]" \
+        --source "${NUGET_REPO_URL}"
+
+"mr-build-$[[ inputs.environment ]]-$[[ inputs.app_title ]]":
+  extends: ".build-$[[ inputs.environment ]]"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event' && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "$[[ inputs.default_branch ]]"
+
+"build-$[[ inputs.environment ]]-$[[ inputs.app_title ]]":
+  extends: ".build-$[[ inputs.environment ]]"
+  artifacts:
+    expire_in: $[[ inputs.artifacts_expiry_time ]]
+    paths:
+      - $[[ inputs.binary_directory ]]
+  before_script:
+    - $[[ inputs.before_script ]]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "$[[ inputs.default_branch ]]" && $IF_FALSE == "$[[ inputs.if_deploy_by_tag ]]"'
+    - if: '$CI_COMMIT_TAG != null && $CI_COMMIT_TAG =~ "$[[ inputs.commit_tag_regexp ]]" && $IF_TRUTH == "$[[ inputs.if_deploy_by_tag ]]"'

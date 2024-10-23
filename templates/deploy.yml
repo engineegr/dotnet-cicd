@@ -1,0 +1,231 @@
+spec:
+  inputs:
+    #
+    # Component deploy.yml
+    #
+    stage:
+      default: deploy
+      description: "Defines the deploy stage"
+    if_deploy_stage:
+      default: "true"
+      description: "If defines the deploy stage jobs"
+    shell_runner:
+      default: linux
+      description: "Gitlab runner to deploy build"
+    app_title:
+      default: LdapQueryTest
+      description: "Dotnet application title"
+    binary_directory:
+      default: app
+      description: "Output directory for created binary artifacts"
+    appsettings_dir:
+      default: test/LdapQueryAPI
+      description: "Dir where appsettings is stored"
+    standby_before_script:
+      default: echo "INFO [ deploy ] standby_before_script"
+      description: |
+        Use the parameter as a standby script if no before_script is passed
+    before_script:
+      default: "DUMMY"
+      description: |
+        Override before_script for deploy template
+        Main before_script (deploy job) creates the following shell environment variables (scope: before_script):
+          IF_BINARY_BACKUP - if backup binary directory before update
+          DEPLOY_ENV_NAME - name of deployment env name
+          APPSETTINGS_DIR - appsettings.json files directory
+          APPBINARY_DIR - application binary artifact directory
+          ASPNETCORE_ENVIRONMENT - saltstack uses the variable to pass it on the app service process
+          (@see https://gitlab.sakhalinenergy.ru/apps-team/salt/-/blob/main/files/services/linux/dotnet-app/dotnet-app.service.jinja?ref_type=heads;
+                https://learn.microsoft.com/en-us/aspnet/core/fundamentals/environments?view=aspnetcore-8.0)
+        IMPORTANT: we can use them into our parameter called as deploy_before_script (@see full-deploy component)
+
+    standby_after_script:
+      default: |
+        echo "INFO [ deploy ] standby_after_script"
+        echo "INFO deploy standby_after_script Try to delete ${APPBINARY_DIR}/appsettings.${DEPLOY_ASPNETCORE_ENV}.json"
+        if [[ -f "${APPBINARY_DIR}/appsettings.${DEPLOY_ASPNETCORE_ENV}.json" ]]; then
+          rm "${APPBINARY_DIR}/appsettings.${DEPLOY_ASPNETCORE_ENV}.json"
+        fi
+      description: |
+        Use the parameter as a standby script if no after_script is passed
+    after_script:
+      default: "DUMMY"
+      description: "Override after_script for deploy template"
+    # commit or tag source branch branch
+    default_branch:
+      default: $CI_COMMIT_BRANCH
+      description: "Default commit branch (may be any branch)"
+    commit_tag_regexp:
+      default: "/-develop$/"
+      description: "Tag: allows to deploy by tag"
+    environment:
+      default: development
+      description: "Deploy environment"
+    app_svc:
+      default: ldap_query_api
+      description: "Systemd service name for the app"
+    app_dir:
+      default: /usr/local/share/applications/dotnet-apps/LdapQueryTest
+    deploy_when:
+      options: ["on_success", "manual"]
+      default: "on_success"
+      description: "Control when run deploy. Default: Run the job only when no jobs in earlier stages fail"
+    release_when:
+      options: ["on_success", "manual"]
+      default: "manual"
+      description: "Control release creation: manually (default)"
+    if_binary_backup:
+      default: "false"
+      description: "If we should backup the binary app dir before update"
+    if_release_job:
+      default: "false"
+      description: "If we must include application release job"
+    release_output_dir:
+      default: "/tmp"
+      description: "Output dir used to prepare application release"
+    aspnetcore_environment:
+      default: "Production"
+      description: |
+        SaltStack constructs dotnet application systemd services and passes the app process on the ASPNETCORE_ENVIRONMENT shell env variable.
+        deploy template deletes appsettings.${ASPNETCORE_ENVIRONMENT}.json by default to prevent repeatadely merge appsettings.json with
+        appsettings.${ASPNETCORE_ENVIRONMENT}.json
+    if_deploy_by_tag:
+      default: "false"
+      description: "If we must deploy application by creating branch tag"
+
+---
+variables:
+  # Use the global variables to have ability to pass through or omit the stages (test, deploy)
+  CI_DEBUG_TRACE: "true"
+  IF_TRUTH: "true"
+  IF_FALSE: "false"
+  DUMMY: "DUMMY"
+
+".deploy-$[[ inputs.environment ]]-build":
+  before_script:
+    - |
+      # child shells inherits set built-in opts (if they are not included via source/dot
+      # @see https://www.gnu.org/software/bash/manual/html_node/The-Set-Builtin.html)
+      export SHELLOPTS
+      set -o errexit
+      set -o xtrace
+      # backup our app binary before update
+      IF_BINARY_BACKUP="$[[ inputs.if_binary_backup ]]"
+      echo "DEBUG deploy Check IF_BINARY_BACKUP=${IF_BINARY_BACKUP}"
+      if [[ "${IF_BINARY_BACKUP}" == "true" ]]; then
+        tar cvzf "$[[ inputs.app_dir ]]/backup/$[[ inputs.app_title ]]_$(date +%Y%m%d_%H%M%S).tar.gz" \
+          "$[[ inputs.app_dir ]]/app"
+      else
+        echo "DEBUG deploy Check IF_BINARY_BACKUP=${IF_BINARY_BACKUP}: don't create backup"
+      fi
+      export DEPLOY_ENV_NAME="$[[ inputs.environment ]]"
+      export APPSETTINGS_DIR="$[[ inputs.appsettings_dir ]]"
+      export APPBINARY_DIR="$[[ inputs.binary_directory ]]"
+
+      # ${DEPLOY_ENV_NAME^} - convert the first letter to upper case
+      echo "DEBUG deploy Check Env variables DEPLOY_ENV_NAME=${DEPLOY_ENV_NAME^}"
+      echo "DEBUG deploy Check Env variables APPBINARY_DIR=${APPBINARY_DIR}"
+      echo "DEBUG deploy Check ${APPBINARY_DIR}/appsettings.json (before merge): "
+      cat ${APPBINARY_DIR}/appsettings.json
+
+      set -o noglob
+      if [[ -f "${APPBINARY_DIR}/appsettings.${DEPLOY_ENV_NAME^}.json" ]]; then
+        echo "DEBUG deploy Check ${APPBINARY_DIR}/appsettings.${DEPLOY_ENV_NAME^}.json: "
+        cat ${APPBINARY_DIR}/appsettings.${DEPLOY_ENV_NAME^}.json
+        echo "DEBUG deploy Merge ${APPBINARY_DIR}/appsettings.json and ${APPBINARY_DIR}/appsettings.${DEPLOY_ENV_NAME^}.json..."
+        jq '. * input' "${APPBINARY_DIR}/appsettings.json" \
+          "${APPBINARY_DIR}/appsettings.${DEPLOY_ENV_NAME^}.json" \
+          > "${APPBINARY_DIR}/appsettings.json.tmp"
+      else
+        cp "${APPBINARY_DIR}/appsettings.json" "${APPBINARY_DIR}/appsettings.json.tmp"
+      fi
+
+      echo "DEBUG deploy Merge ${APPBINARY_DIR}/appsettings.json.tmp RESULT:"
+      cat ${APPBINARY_DIR}/appsettings.json.tmp
+      if [ "$[[ inputs.before_script ]]" == "$DUMMY" ]; then
+        echo "DEBUG deploy START standby_before_script"
+        $[[ inputs.standby_before_script ]]
+      else
+        echo "DEBUG deploy START before_script"
+        $[[ inputs.before_script ]]
+      fi
+      set +o noglob
+  script:
+    - |
+      rsync -avP -O --include="*.*" --delete $[[ inputs.binary_directory ]]/ $[[ inputs.app_dir ]]/app
+      sudo systemctl daemon-reload
+      sudo systemctl restart $[[ inputs.app_svc ]].service
+      sudo systemctl reload httpd
+  after_script:
+    - |
+      # child shells inherits set built-in opts (if they are not included via source/dot
+      # @see https://www.gnu.org/software/bash/manual/html_node/The-Set-Builtin.html)
+      export SHELLOPTS
+      set -o errexit
+      set -o xtrace
+
+      export DEPLOY_AFTER_SCRIPT="$[[ inputs.after_script ]]"
+      export DEPLOY_ASPNETCORE_ENV="$[[ inputs.aspnetcore_environment ]]"
+      if [[ "${DEPLOY_ASPNETCORE_ENV}" == "$DUMMY" ]]; then
+        export DEPLOY_ASPNETCORE_ENV="${DEPLOY_COMMON_ASPNETCORE_ENV}"
+      fi
+      export APPBINARY_DIR="$[[ inputs.binary_directory ]]"
+      export LOCAL_APP_DIR="$[[ inputs.app_dir ]]"
+
+      set -o noglob
+      echo "DEBUG deploy Start after_script "
+      if [[ "$[[ inputs.after_script ]]" == "$DUMMY" ]]; then
+        echo "DEBUG deploy START standby_after_script"
+        $[[ inputs.standby_after_script ]]
+      else
+        echo "DEBUG deploy START after_script"
+        "$[[ inputs.after_script ]]"
+      fi
+      set +o noglob
+
+"deploy-$[[ inputs.environment ]]-build-$[[ inputs.app_title ]]":
+  environment: $[[ inputs.environment ]]
+  stage: $[[ inputs.stage ]]
+  when: $[[ inputs.deploy_when ]]
+  extends: ".deploy-$[[ inputs.environment ]]-build"
+  allow_failure: false
+  tags:
+    - $[[ inputs.shell_runner ]]
+  rules:
+    - if: '$IF_TRUTH =~ "$[[ inputs.if_deploy_stage ]]" && $CI_COMMIT_BRANCH != null && $CI_COMMIT_BRANCH == "$[[ inputs.default_branch ]]" && $IF_FALSE == "$[[ inputs.if_deploy_by_tag ]]"'
+    - if: '$IF_TRUTH =~ "$[[ inputs.if_deploy_stage ]]" && $CI_COMMIT_TAG != null && $CI_COMMIT_TAG =~ "$[[ inputs.commit_tag_regexp ]]" && $IF_TRUTH == "$[[ inputs.if_deploy_by_tag ]]"'
+
+"release-$[[ inputs.environment ]]-build-$[[ inputs.app_title ]]":
+  environment: $[[ inputs.environment ]]
+  stage: $[[ inputs.stage ]]
+  when: $[[ inputs.release_when ]]
+  extends: ".deploy-$[[ inputs.environment ]]-build"
+  tags:
+    - $[[ inputs.shell_runner ]]
+  script:
+    - |
+      # child shells inherits set built-in opts (if they are not included via source/dot
+      # @see https://www.gnu.org/software/bash/manual/html_node/The-Set-Builtin.html)
+      export SHELLOPTS
+      set -o errexit
+      set -o xtrace
+
+      RELEASE_DIR="$[[ inputs.release_output_dir ]]"
+      echo "DEBUG deploy Check RELEASE_DIR=${RELEASE_DIR}"
+      if [[ ! -d "${RELEASE_DIR}" ]]; then
+        echo "ERROR deploy No Root Release Dir RELEASE_DIR=${RELEASE_DIR}, please, create it manually. Dir Permissions: user=gitlab-runner, group=service-dotnet-app"
+        exit 1;
+      fi
+      RELEASE_TIMESTAMP="$(date +%Y%m%d_%H%M%S%N)"
+      APP_RELEASE_OUTPUT_DIR="${RELEASE_DIR}/${RELEASE_TIMESTAMP}"
+      echo "DEBUG deploy Check APP_RELEASE_OUTPUT_DIR=${APP_RELEASE_OUTPUT_DIR}"
+      mkdir -p "${APP_RELEASE_OUTPUT_DIR}"
+      rsync -avP -O --include="*.*" --delete "$[[ inputs.binary_directory ]]/" "${APP_RELEASE_OUTPUT_DIR}"
+      ls -lat "${APP_RELEASE_OUTPUT_DIR}"
+      tar cvzf "$[[ inputs.app_title ]]_${RELEASE_TIMESTAMP}.tar.gz" -C "${APP_RELEASE_OUTPUT_DIR}" \
+          "${APP_RELEASE_OUTPUT_DIR}"
+      rm -Rf "${APP_RELEASE_OUTPUT_DIR}"
+
+  rules:
+    - if: '$IF_TRUTH =~ "$[[ inputs.if_deploy_stage ]]" && $IF_TRUTH == "$[[ inputs.if_release_job ]]" && $CI_COMMIT_BRANCH != null && $CI_COMMIT_BRANCH == "$[[ inputs.default_branch ]]" && $IF_FALSE == "$[[ inputs.if_deploy_by_tag ]]"'
+    - if: '$IF_TRUTH =~ "$[[ inputs.if_deploy_stage ]]" && $IF_TRUTH == "$[[ inputs.if_release_job ]]" && $CI_COMMIT_TAG != null && $CI_COMMIT_TAG =~ "$[[ inputs.commit_tag_regexp ]]" && $IF_TRUTH == "$[[ inputs.if_deploy_by_tag ]]"'
