@@ -3,6 +3,7 @@
 ## Usage
 ### Migrate DB
 ```
+# Add to .gitlab-ci.yml
 #
 # Migrate DB super-app
 #
